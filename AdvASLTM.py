@@ -7,17 +7,19 @@ class TemporalAttentionLayer(tf.keras.layers.Layer):
         self.E1 = units
     def build(self, input_shape):
         # h (bs, T, U)
-        self.Wa = self.add_weight("Wa", shape=(self.E1, input_shape[-1]), initializer='random_normal', trainable=True)
-        self.ba = self.add_weight("ba", shape=(self.E1, 1), initializer='zeros', trainable=True)
+        self.dense_Wa_ba = tf.keras.layers.Dense(self.E1, activation = "tanh", kernel_regularizer = tf.keras.regularizers.L2(0.01))
+        # self.Wa = self.add_weight("Wa", shape=(self.E1, input_shape[-1]), initializer='random_normal', trainable=True)
+        # self.ba = self.add_weight("ba", shape=(self.E1, 1), initializer='zeros', trainable=True)
         self.ua = self.add_weight("ua", shape=(self.E1, 1), initializer='random_normal', trainable=True)
         return super().build(input_shape)
 
     def call(self, h):
         # h (bs, T, U) -> (bs, T, U, 1)
-        x = tf.expand_dims(h, axis = -1)
-        x = tf.matmul(self.Wa, x) + self.ba 
-        x = tf.nn.tanh(x)
-        x = tf.matmul(self.ua, x, transpose_a= True)[..., 0, 0]
+        x = self.dense_Wa_ba(h)
+        # x = tf.expand_dims(h, axis = -1)
+        # x = tf.matmul(self.Wa, x) + self.ba 
+        # x = tf.nn.tanh(x)
+        x = tf.matmul(self.ua, tf.expand_dims(x, axis = -1), transpose_a= True)[..., 0, 0]
         alpha = tf.nn.softmax(x) #(bs, T)
         a_s = tf.matmul(tf.expand_dims(alpha, axis=-1), h, transpose_a = True)[:,0,:]
         return a_s # (bs, U)
@@ -55,29 +57,31 @@ class PredictionLayer(tf.keras.layers.Layer):
 
     
 class AdvALSTMModel(tf.keras.Model):
-    def __init__(self, my_beta, my_epsilon, my_L2, my_E, my_U, my_E1):
+    def __init__(self, units, dropout, my_beta, my_epsilon, my_L2):
         super().__init__()
 
         self.my_beta = my_beta
         self.my_epsilon = my_epsilon 
-        self.my_E = my_E
-        self.my_U = my_U
-        self.my_E1 = my_E1
+        self.my_E = units
+        self.my_U = units
+        self.my_E1 = units
         self.my_L2 = my_L2
+        self.dropout = dropout
         
         self.feature_mapping_layer = tf.keras.layers.Dense(units = self.my_E, activation= "tanh")
-        self.lstm_layer = tf.keras.layers.LSTM(units= self.my_U, return_sequences=True, kernel_regularizer=tf.keras.regularizers.l2(self.my_L2))
+        self.lstm_layer = tf.keras.layers.LSTM(units= self.my_U, return_sequences=True, dropout = self.dropout)#, recurrent_regularizer=tf.keras.regularizers.l2(self.my_L2))
         self.temporal_attention_layer = TemporalAttentionLayer(units= self.my_E1)
         self.latent_layer = LatentLayer()
         self.prediction_layer = PredictionLayer()
 
         
-    def call(self, inputs, return_latent_space = False, debug = True):
+    def call(self, inputs, return_latent_space = False, debug = False):
         x = self.feature_mapping_layer(inputs)
         h = self.lstm_layer(x)
         alpha = self.temporal_attention_layer(h)
         e = self.latent_layer([alpha,h])
         y_pred = self.prediction_layer(e)
+        
         if debug: 
             return {
                 "x":x, 
